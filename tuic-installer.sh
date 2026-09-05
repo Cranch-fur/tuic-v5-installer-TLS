@@ -11,16 +11,25 @@ print_with_delay() {
     echo
 }
 
+# Function to clean domain input (removes http://, https://, and trailing slashes/paths)
+clean_domain_input() {
+    local domain="$1"
+    domain="${domain#http://}"
+    domain="${domain#https://}"
+    domain="${domain%%/*}"
+    echo "$domain"
+}
+
 # Introduction animation
 echo ""
 echo ""
-print_with_delay "tuic-installer by DEATHLINE | @NamelesGhoul (Enhanced Version)" 0.1
+print_with_delay "tuic-installer by DEATHLINE | @NamelesGhoul (Enhanced Version) | @cranch_fur (TLS support)" 0.05
 echo ""
 echo ""
 
 # Check for and install required packages
 install_required_packages() {
-    REQUIRED_PACKAGES=("curl" "jq" "openssl" "uuid-runtime" "socat" "wget" "cron")
+    REQUIRED_PACKAGES=("curl" "jq" "openssl" "uuid-runtime" "socat" "wget" "cron" "qrencode")
     for pkg in "${REQUIRED_PACKAGES[@]}"; do
         if ! command -v $pkg &> /dev/null; then
             apt-get update > /dev/null 2>&1
@@ -105,7 +114,7 @@ if [ -d "/root/tuic" ]; then
             systemctl daemon-reload
             systemctl restart tuic
             
-            public_ip=$(curl -s https://api.ipify.org)
+            public_ip=$(curl -s https://api.ipify.org | tr -d '\r\n ')
             
             cert_mode="insecure"
             [ -f "/root/tuic/cert_mode.txt" ] && cert_mode=$(cat /root/tuic/cert_mode.txt)
@@ -113,14 +122,29 @@ if [ -d "/root/tuic" ]; then
             [ -f "/root/tuic/domain.txt" ] && saved_domain=$(cat /root/tuic/domain.txt)
 
             echo -e "\n--- Modified URLs ---"
+            > /root/tuic/client_links.txt
             
             if [ "$cert_mode" = "secure" ]; then
+                SECURE_URL="tuic://${current_uuid}:${new_password}@${saved_domain}:${new_port}/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=${saved_domain}&udp_relay_mode=native&allow_insecure=0"
+                SECURE_URL=$(echo "$SECURE_URL" | tr -d '\r\n\t ')
+                
                 echo -e "\nSecure URL (Valid TLS via Domain):"
-                echo "tuic://$current_uuid:$new_password@$saved_domain:$new_port/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=$saved_domain&udp_relay_mode=native&allow_insecure=0"
+                echo "$SECURE_URL"
+                echo "$SECURE_URL" >> /root/tuic/client_links.txt
+                echo -e "\nQR Code:"
+                qrencode -t ANSIUTF8 "$SECURE_URL"
             fi
             
+            INSECURE_URL="tuic://${current_uuid}:${new_password}@${public_ip}:${new_port}/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=${saved_domain}&udp_relay_mode=native&allow_insecure=1"
+            INSECURE_URL=$(echo "$INSECURE_URL" | tr -d '\r\n\t ')
+            
             echo -e "\nDirect IP URL (AllowInsecure):"
-            echo "tuic://$current_uuid:$new_password@$public_ip:$new_port/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=$saved_domain&udp_relay_mode=native&allow_insecure=1"
+            echo "$INSECURE_URL"
+            echo "$INSECURE_URL" >> /root/tuic/client_links.txt
+            echo -e "\nQR Code:"
+            qrencode -t ANSIUTF8 "$INSECURE_URL"
+            
+            echo -e "\n[i] Links have been saved to: /root/tuic/client_links.txt"
             echo ""
             exit 0
             ;;
@@ -197,9 +221,10 @@ CERT_MODE="insecure"
 case $cert_choice in
     1)
         echo ""
-        read -p "Enter absolute path to fullchain certificate (e.g., /root/cert/public.cer): " CERT_PATH
-        read -p "Enter absolute path to private key (e.g., /root/cert/private.key): " KEY_PATH
-        read -p "Enter the domain name (SNI) associated with this certificate: " SNI_NAME
+        read -p "Enter absolute path to full-chain certificate (e.g., /root/cert/fullchain.cer): " CERT_PATH
+        read -p "Enter absolute path to private key (e.g., /root/cert/www.mydomain.com.key): " KEY_PATH
+        read -p "Enter the domain name / SNI (e.g., www.mydomain.com): " raw_sni
+        SNI_NAME=$(clean_domain_input "$raw_sni")
         
         if [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
             CERT_MODE="secure"
@@ -213,7 +238,8 @@ case $cert_choice in
         ;;
     2)
         echo ""
-        read -p "Enter your domain for Let's Encrypt: " domain_name
+        read -p "Enter your domain for Let's Encrypt: " raw_domain
+        domain_name=$(clean_domain_input "$raw_domain")
         echo "Attempting to issue a certificate for $domain_name via acme.sh..."
         
         # Install acme.sh if not present
@@ -328,23 +354,38 @@ systemctl enable tuic > /dev/null 2>&1
 systemctl start tuic
 
 # Print final configurations and URLs
-public_ip=$(curl -s https://api.ipify.org)
+public_ip=$(curl -s https://api.ipify.org | tr -d '\r\n ')
 
 echo -e "\n============================================="
 echo "        TUIC v5 Installation Complete        "
 echo "============================================="
 
+> /root/tuic/client_links.txt
+
 if [ "$CERT_MODE" = "secure" ]; then
+    SECURE_URL="tuic://${UUID}:${password}@${SNI_NAME}:${port}/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=${SNI_NAME}&udp_relay_mode=native&allow_insecure=0"
+    SECURE_URL=$(echo "$SECURE_URL" | tr -d '\r\n\t ')
+    
     echo -e "\n[+] Secure URL (Valid TLS via Domain):"
-    echo -e "Use this if your network does not block the domain name."
-    echo "tuic://$UUID:$password@$SNI_NAME:$port/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=$SNI_NAME&udp_relay_mode=native&allow_insecure=0"
+    echo "$SECURE_URL"
+    echo "$SECURE_URL" >> /root/tuic/client_links.txt
+    
+    echo -e "\nScan this QR code in NekoBox / v2rayN:"
+    qrencode -t ANSIUTF8 "$SECURE_URL"
 fi
 
+INSECURE_URL="tuic://${UUID}:${password}@${public_ip}:${port}/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=${SNI_NAME}&udp_relay_mode=native&allow_insecure=1"
+INSECURE_URL=$(echo "$INSECURE_URL" | tr -d '\r\n\t ')
+
 echo -e "\n[+] Direct IP URL (AllowInsecure):"
-if [ "$CERT_MODE" = "secure" ]; then
-    echo -e "Use this if you want to bypass DNS/SNI blocking directly via IP."
-else
+if [ "$CERT_MODE" != "secure" ]; then
     echo -e "Configured without a valid domain. Connection requires AllowInsecure."
 fi
-echo "tuic://$UUID:$password@$public_ip:$port/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=$SNI_NAME&udp_relay_mode=native&allow_insecure=1"
+echo "$INSECURE_URL"
+echo "$INSECURE_URL" >> /root/tuic/client_links.txt
+
+echo -e "\nScan this QR code in NekoBox / v2rayN:"
+qrencode -t ANSIUTF8 "$INSECURE_URL"
+
+echo -e "\n[i] Links have also been saved to: /root/tuic/client_links.txt"
 echo -e "=============================================\n"
