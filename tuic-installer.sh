@@ -80,6 +80,9 @@ install_required_packages() {
         fi
     done
 
+    # Remove the leading space that occurs during concatenation
+    MISSING_PKGS="${MISSING_PKGS# }"
+
     if [ -n "$MISSING_PKGS" ]; then
         start_spinner "Installing missing packages ($MISSING_PKGS)..."
         export DEBIAN_FRONTEND=noninteractive
@@ -438,8 +441,8 @@ if [ "$CERT_MODE" = "secure" ]; then
     echo "$SECURE_URL"
     echo "$SECURE_URL" >> /root/tuic/client_links.txt
     
-    echo -e "\nScan this QR code in NekoBox / v2rayN:"
-    qrencode -t ANSIUTF8 "$SECURE_URL"
+    echo -e "\nSecure connection as QR:"
+    qrencode -t ANSIUTF8 -m 2 "$SECURE_URL"
 fi
 
 INSECURE_URL="tuic://${UUID}:${password}@${public_ip}:${port}/?congestion_control=bbr&alpn=h3,spdy/3.1&sni=${SNI_NAME}&udp_relay_mode=native&allow_insecure=1"
@@ -452,8 +455,8 @@ fi
 echo "$INSECURE_URL"
 echo "$INSECURE_URL" >> /root/tuic/client_links.txt
 
-echo -e "\nScan this QR code in NekoBox / v2rayN:"
-qrencode -t ANSIUTF8 "$INSECURE_URL"
+echo -e "\nDirect (AllowInsecure) connection as QR:"
+qrencode -t ANSIUTF8 -m 2 "$INSECURE_URL"
 
 echo -e "\n[i] Links have also been saved to: /root/tuic/client_links.txt"
 echo -e "=============================================\n"
