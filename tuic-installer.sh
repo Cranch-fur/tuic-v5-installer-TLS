@@ -58,9 +58,8 @@ print_with_delay "tuic-installer by DEATHLINE | @NamelesGhoul (Enhanced Version)
 echo ""
 echo ""
 
-# Check for and install required packages properly
+# Check for and install required packages properly (Optimized: One-time install)
 install_required_packages() {
-    # Format: "command_to_check:package_to_install"
     REQUIRED_CMDS=(
         "curl:curl" 
         "jq:jq" 
@@ -72,17 +71,22 @@ install_required_packages() {
         "qrencode:qrencode"
     )
     
+    MISSING_PKGS=""
     for item in "${REQUIRED_CMDS[@]}"; do
         cmd="${item%%:*}"
         pkg="${item##*:}"
         if ! command -v "$cmd" &> /dev/null; then
-            start_spinner "[i] Installing missing package: $pkg..."
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update > /dev/null 2>&1
-            apt-get install -y "$pkg" > /dev/null 2>&1
-            stop_spinner $?
+            MISSING_PKGS="$MISSING_PKGS $pkg"
         fi
     done
+
+    if [ -n "$MISSING_PKGS" ]; then
+        start_spinner "Installing missing packages ($MISSING_PKGS)..."
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update > /dev/null 2>&1
+        apt-get install -y $MISSING_PKGS > /dev/null 2>&1
+        stop_spinner $?
+    fi
 }
 
 # Apply network tuning for maximum QUIC/UDP performance
