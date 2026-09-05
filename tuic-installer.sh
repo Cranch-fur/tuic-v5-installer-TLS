@@ -20,27 +20,74 @@ clean_domain_input() {
     echo "$domain"
 }
 
+# Spinner functions for long-running tasks
+start_spinner() {
+    local msg="$1"
+    echo -ne "$msg "
+    # Run spinner in background
+    {
+        while true; do
+            for c in '-' '\' '|' '/'; do
+                echo -ne "\b$c"
+                sleep 0.1
+            done
+        done
+    } &
+    SPINNER_PID=$!
+}
+
+stop_spinner() {
+    local exit_code=$1
+    # Kill the background spinner
+    kill $SPINNER_PID > /dev/null 2>&1
+    wait $SPINNER_PID 2>/dev/null
+    # Clear the spinner character
+    echo -ne "\b \b"
+    # Print status
+    if [ -z "$exit_code" ] || [ "$exit_code" -eq 0 ]; then
+        echo -e "[Done]"
+    else
+        echo -e "[Failed]"
+    fi
+}
+
 # Introduction animation
 echo ""
 echo ""
-print_with_delay "tuic-installer by DEATHLINE | @NamelesGhoul (Enhanced Version) | @cranch_fur (TLS support)" 0.05
+print_with_delay "tuic-installer by DEATHLINE | @NamelesGhoul (Enhanced Version) | @cranch_fur (TLS support)" 0.02
 echo ""
 echo ""
 
-# Check for and install required packages
+# Check for and install required packages properly
 install_required_packages() {
-    REQUIRED_PACKAGES=("curl" "jq" "openssl" "uuid-runtime" "socat" "wget" "cron" "qrencode")
-    for pkg in "${REQUIRED_PACKAGES[@]}"; do
-        if ! command -v $pkg &> /dev/null; then
+    # Format: "command_to_check:package_to_install"
+    REQUIRED_CMDS=(
+        "curl:curl" 
+        "jq:jq" 
+        "openssl:openssl" 
+        "uuidgen:uuid-runtime" 
+        "socat:socat" 
+        "wget:wget" 
+        "crontab:cron" 
+        "qrencode:qrencode"
+    )
+    
+    for item in "${REQUIRED_CMDS[@]}"; do
+        cmd="${item%%:*}"
+        pkg="${item##*:}"
+        if ! command -v "$cmd" &> /dev/null; then
+            start_spinner "[i] Installing missing package: $pkg..."
+            export DEBIAN_FRONTEND=noninteractive
             apt-get update > /dev/null 2>&1
-            apt-get install -y $pkg > /dev/null 2>&1
+            apt-get install -y "$pkg" > /dev/null 2>&1
+            stop_spinner $?
         fi
     done
 }
 
 # Apply network tuning for maximum QUIC/UDP performance
 tune_network() {
-    echo "Applying network optimizations (BBR & UDP buffers)..."
+    start_spinner "Applying network optimizations (BBR & UDP buffers)..."
     # Clean up previous entries to avoid duplication
     sed -i '/# TUIC Tuning/d' /etc/sysctl.conf
     sed -i '/net.core.default_qdisc=fq/d' /etc/sysctl.conf
@@ -61,14 +108,16 @@ net.core.rmem_default=1048576
 net.core.wmem_default=1048576
 EOF
     sysctl -p > /dev/null 2>&1
+    stop_spinner 0
 }
 
 # Function to safely remove acme.sh auto-renewal task if it was used
 remove_acme_task() {
     if [ -f "/root/tuic/acme_domain.txt" ] && [ -f "$HOME/.acme.sh/acme.sh" ]; then
         domain_to_remove=$(cat /root/tuic/acme_domain.txt)
-        echo "Removing acme.sh auto-renewal task for $domain_to_remove..."
+        start_spinner "Removing acme.sh auto-renewal task for $domain_to_remove..."
         $HOME/.acme.sh/acme.sh --remove -d "$domain_to_remove" > /dev/null 2>&1
+        stop_spinner 0
     fi
 }
 
@@ -88,12 +137,20 @@ if [ -d "/root/tuic" ]; then
 
     case $choice in
         1)
+            echo "Preparing for reinstallation..."
             remove_acme_task
-            rm -rf /root/tuic
-            systemctl stop tuic
-            pkill -f tuic-server
+            
+            start_spinner "Stopping and removing old tuic service..."
+            systemctl stop tuic > /dev/null 2>&1
             systemctl disable tuic > /dev/null 2>&1
-            rm /etc/systemd/system/tuic.service
+            rm -f /etc/systemd/system/tuic.service
+            systemctl daemon-reload
+            pkill -f tuic-server > /dev/null 2>&1
+            rm -rf /root/tuic
+            stop_spinner 0
+            
+            echo "Proceeding with fresh installation..."
+            echo ""
             ;;
         2)
             cd /root/tuic
@@ -149,12 +206,18 @@ if [ -d "/root/tuic" ]; then
             exit 0
             ;;
         3)
+            echo "Uninstalling TUIC..."
             remove_acme_task
-            rm -rf /root/tuic
-            systemctl stop tuic
-            pkill -f tuic-server
+            
+            start_spinner "Stopping and removing tuic service..."
+            systemctl stop tuic > /dev/null 2>&1
             systemctl disable tuic > /dev/null 2>&1
-            rm /etc/systemd/system/tuic.service
+            rm -f /etc/systemd/system/tuic.service
+            systemctl daemon-reload
+            pkill -f tuic-server > /dev/null 2>&1
+            rm -rf /root/tuic
+            stop_spinner 0
+            
             echo "tuic uninstalled successfully!"
             echo ""
             exit 0
@@ -174,22 +237,11 @@ tune_network
 detect_arch() {
     local arch=$(uname -m)
     case $arch in
-        x86_64)
-            echo "x86_64-unknown-linux-gnu"
-            ;;
-        i686)
-            echo "i686-unknown-linux-gnu"
-            ;;
-        armv7l)
-            echo "armv7-unknown-linux-gnueabi"
-            ;;
-        aarch64)
-            echo "aarch64-unknown-linux-gnu"
-            ;;
-        *)
-            echo "Unsupported architecture: $arch"
-            exit 1
-            ;;
+        x86_64) echo "x86_64-unknown-linux-gnu" ;;
+        i686) echo "i686-unknown-linux-gnu" ;;
+        armv7l) echo "armv7-unknown-linux-gnueabi" ;;
+        aarch64) echo "aarch64-unknown-linux-gnu" ;;
+        *) echo "Unsupported architecture: $arch"; exit 1 ;;
     esac
 }
 
@@ -199,9 +251,14 @@ latest_release_version=$(curl -s "https://api.github.com/repos/etjec4/tuic/relea
 # Download the binary
 mkdir -p /root/tuic
 cd /root/tuic
+
+start_spinner "Downloading TUIC server version $latest_release_version..."
 download_url="https://github.com/etjec4/tuic/releases/download/$latest_release_version/$latest_release_version-$server_arch"
 wget -O tuic-server -q "$download_url"
-if [[ $? -ne 0 ]]; then
+status=$?
+stop_spinner $status
+
+if [[ $status -ne 0 ]]; then
     echo "Failed to download the tuic binary."
     exit 1
 fi
@@ -240,22 +297,26 @@ case $cert_choice in
         echo ""
         read -p "Enter your domain for Let's Encrypt: " raw_domain
         domain_name=$(clean_domain_input "$raw_domain")
-        echo "Attempting to issue a certificate for $domain_name via acme.sh..."
         
         # Install acme.sh if not present
         if [ ! -f "$HOME/.acme.sh/acme.sh" ]; then
-            curl -s https://get.acme.sh | sh -s email="admin@$domain_name"
+            start_spinner "Installing acme.sh..."
+            curl -s https://get.acme.sh | sh -s email="admin@$domain_name" > /dev/null 2>&1
+            stop_spinner $?
         fi
         
+        start_spinner "Attempting to issue a certificate for $domain_name via acme.sh (this may take a minute)..."
         # Issue cert (requires port 80 to be free)
-        $HOME/.acme.sh/acme.sh --issue --standalone -d "$domain_name" --force
+        $HOME/.acme.sh/acme.sh --issue --standalone -d "$domain_name" --force > /dev/null 2>&1
+        acme_status=$?
+        stop_spinner $acme_status
         
-        if [ $? -eq 0 ]; then
+        if [ $acme_status -eq 0 ]; then
             # Install cert and setup auto-restart hook for TUIC upon renewal
             $HOME/.acme.sh/acme.sh --install-cert -d "$domain_name" \
                 --key-file /root/tuic/server.key \
                 --fullchain-file /root/tuic/server.crt \
-                --reloadcmd "systemctl restart tuic"
+                --reloadcmd "systemctl restart tuic" > /dev/null 2>&1
                 
             CERT_PATH="/root/tuic/server.crt"
             KEY_PATH="/root/tuic/server.key"
@@ -275,15 +336,16 @@ esac
 
 # Fallback or intentional self-signed generation
 if [[ "$cert_choice" == "3" || "$cert_choice" != "1" && "$cert_choice" != "2" ]]; then
-    echo "Creating self-signed certs for AllowInsecure connections..."
-    openssl ecparam -genkey -name prime256v1 -out /root/tuic/ca.key
-    openssl req -new -x509 -days 36500 -key /root/tuic/ca.key -out /root/tuic/ca.crt -subj "/CN=bing.com"
+    start_spinner "Creating self-signed certs for AllowInsecure connections..."
+    openssl ecparam -genkey -name prime256v1 -out /root/tuic/ca.key > /dev/null 2>&1
+    openssl req -new -x509 -days 36500 -key /root/tuic/ca.key -out /root/tuic/ca.crt -subj "/CN=bing.com" > /dev/null 2>&1
     CERT_PATH="/root/tuic/ca.crt"
     KEY_PATH="/root/tuic/ca.key"
     SNI_NAME="bing.com"
     CERT_MODE="insecure"
     echo "insecure" > /root/tuic/cert_mode.txt
     echo "bing.com" > /root/tuic/domain.txt
+    stop_spinner 0
 fi
 
 # Prompt user for port and password
@@ -349,9 +411,11 @@ WantedBy=multi-user.target
 EOL
 
 # Reload systemd, enable and start tuic
+start_spinner "Starting TUIC service..."
 systemctl daemon-reload
 systemctl enable tuic > /dev/null 2>&1
 systemctl start tuic
+stop_spinner 0
 
 # Print final configurations and URLs
 public_ip=$(curl -s https://api.ipify.org | tr -d '\r\n ')
